@@ -1,0 +1,149 @@
+import os
+import streamlit as st
+import logging
+from dotenv import load_dotenv
+from pinecone import Pinecone, ServerlessSpec
+from langchain.chains import RetrievalQA
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.prompts import PromptTemplate
+
+# LLMs
+from langchain_community.llms import HuggingFacePipeline
+from langchain_cohere.chat_models import ChatCohere
+
+# Embeddings & Vectorstore
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_pinecone import PineconeVectorStore
+
+# Transformers
+from transformers import AutoTokenizer, pipeline
+
+# Setup
+logging.basicConfig(level=logging.INFO)
+load_dotenv()
+
+# Config
+index_name = "test"
+region = "us-east-1"
+cloud = "aws"
+dimension = 384
+pdf_path = "your_file.pdf"  # Replace with your PDF path
+embedding_model_name = "sentence-transformers/all-MiniLM-L6-v2"
+
+pinecone_api_key = os.getenv("PINECONE_API_KEY")
+cohere_api_key = os.getenv("COHERE_API_KEY")
+
+# Prompt Template
+prompt_template = """Use the following context to answer the question.
+If you cannot find the answer in the context, say "I don't know."
+
+Context: {context}
+
+Question: {question}
+
+Answer:"""
+
+PROMPT = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
+
+# Pinecone setup
+pc = Pinecone(api_key=pinecone_api_key)
+if index_name not in pc.list_indexes().names():
+    pc.create_index(
+        name=index_name,
+        dimension=dimension,
+        metric="cosine",
+        spec=ServerlessSpec(cloud=cloud, region=region),
+    )
+index = pc.Index(index_name)
+
+# Embeddings
+embeddings = HuggingFaceEmbeddings(model_name=embedding_model_name)
+
+# Vectorstore
+vectorstore = PineconeVectorStore(index=index, embedding=embeddings, text_key="text")
+
+# Embed PDF once if index is empty
+def embed_pdf_to_pinecone():
+    loader = PyPDFLoader(pdf_path)
+    documents = loader.load()
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+    docs = splitter.split_documents(documents)
+
+    vectors = []
+    for i, doc in enumerate(docs):
+        vectors.append({
+            "id": f"pdf_chunk_{i}",
+            "values": embeddings.embed_query(doc.page_content),
+            "metadata": {"text": doc.page_content, "source": f"page_{i}"}
+        })
+
+    index.upsert(vectors=vectors)
+    return len(vectors)
+
+# LLM choice
+def get_llm(model_type):
+    if model_type == "Cohere (Cloud)":
+        return ChatCohere(
+            model="command-r",
+            cohere_api_key=cohere_api_key,
+            temperature=0.7,
+            max_tokens=512
+        )
+    else:
+        model_name = "microsoft/DialoGPT-small"
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer.pad_token = tokenizer.eos_token
+        gen = pipeline(
+            "text-generation",
+            model=model_name,
+            tokenizer=tokenizer,
+            max_new_tokens=256,
+            temperature=0.7,
+            do_sample=True,
+            pad_token_id=tokenizer.eos_token_id,
+            return_full_text=False
+        )
+        return HuggingFacePipeline(pipeline=gen)
+
+# Streamlit UI
+st.set_page_config(page_title="PDF QA Chat (No Upload)", layout="wide")
+st.title("📄 Chat with Pre-Loaded PDF (Backend Only)")
+
+model_type = st.radio("Select LLM backend:", ["Cohere (Cloud)", "Local LLM"], horizontal=True)
+
+# Embed if index is empty
+stats = index.describe_index_stats()
+if stats['total_vector_count'] == 0:
+    with st.spinner("Embedding backend PDF into Pinecone..."):
+        count = embed_pdf_to_pinecone()
+        st.success(f"✅ Embedded {count} chunks from the backend PDF!")
+
+# Prompt input
+query = st.text_input("💬 Enter your question:")
+
+if query:
+    try:
+        llm = get_llm(model_type)
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+        qa_chain = RetrievalQA.from_chain_type(
+            llm=llm,
+            retriever=retriever,
+            return_source_documents=True,
+            chain_type="stuff",
+            chain_type_kwargs={"prompt": PROMPT}
+        )
+
+        with st.spinner("Generating answer..."):
+            result = qa_chain.invoke({"query": query})
+
+        st.subheader("🧠 Answer:")
+        st.write(result["result"])
+
+        if result.get("source_documents"):
+            st.subheader("📚 Source Excerpts:")
+            for i, doc in enumerate(result["source_documents"], 1):
+                st.markdown(f"**Chunk {i}:** {doc.page_content[:300]}...")
+
+    except Exception as e:
+        st.error(f"❌ Error: {e}")
