@@ -1,3 +1,4 @@
+
 import os
 import logging
 from dotenv import load_dotenv
@@ -98,15 +99,6 @@ def main():
 
             print("\n📝 Answer:")
             print(response["result"])
-
-            if response.get("source_documents"):
-                print("\n📚 Source Documents:")
-                for i, doc in enumerate(response["source_documents"], 1):
-                    preview = doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content
-                    print(f"\n--- Document {i} ---")
-                    print(preview)
-            else:
-                print("\n📚 No source documents found.")
     except Exception as e:
         logger.error(f"❌ Error in main: {e}")
         import traceback
