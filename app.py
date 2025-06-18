@@ -10,10 +10,12 @@ from langchain_community.vectorstores import Pinecone as PineconeStore
 load_dotenv()
 api_key = os.getenv("PINECONE_API_KEY")
 index_name = "test"
-embedding_model_name = "sentence-transformers/all-mpnet-base-v2"  # 768 dimensions
+embedding_model_name = "sentence-transformers/all-MiniLM-L6-v2"
+
+#embedding_model_name = "sentence-transformers/all-mpnet-base-v2"  # 768 dimensions
 # OR
 # embedding_model_name = "BAAI/bge-large-en-v1.5"  # 1024 dimensions
-dimension = 768  # Update this to match your chosen model
+dimension = 384  # Update this to match your chosen model
 region = "us-east-1"
 
 if not api_key:
