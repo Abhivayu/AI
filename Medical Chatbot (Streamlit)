@@ -9,15 +9,11 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.prompts import PromptTemplate
 
 # LLMs
-from langchain_community.llms import HuggingFacePipeline
 from langchain_cohere.chat_models import ChatCohere
 
 # Embeddings & Vectorstore
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_pinecone import PineconeVectorStore
-
-# Transformers
-from transformers import AutoTokenizer, pipeline
 
 # Setup
 logging.basicConfig(level=logging.INFO)
@@ -28,7 +24,7 @@ index_name = "test"
 region = "us-east-1"
 cloud = "aws"
 dimension = 384
-pdf_path = "your_file.pdf"  # Replace with your PDF path
+pdf_path = "data/IP.pdf"
 embedding_model_name = "sentence-transformers/all-MiniLM-L6-v2"
 
 pinecone_api_key = os.getenv("PINECONE_API_KEY")
@@ -43,7 +39,6 @@ Context: {context}
 Question: {question}
 
 Answer:"""
-
 PROMPT = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
 
 # Pinecone setup
@@ -81,50 +76,32 @@ def embed_pdf_to_pinecone():
     index.upsert(vectors=vectors)
     return len(vectors)
 
-# LLM choice
-def get_llm(model_type):
-    if model_type == "Cohere (Cloud)":
-        return ChatCohere(
-            model="command-r",
-            cohere_api_key=cohere_api_key,
-            temperature=0.7,
-            max_tokens=512
-        )
-    else:
-        model_name = "microsoft/DialoGPT-small"
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        tokenizer.pad_token = tokenizer.eos_token
-        gen = pipeline(
-            "text-generation",
-            model=model_name,
-            tokenizer=tokenizer,
-            max_new_tokens=256,
-            temperature=0.7,
-            do_sample=True,
-            pad_token_id=tokenizer.eos_token_id,
-            return_full_text=False
-        )
-        return HuggingFacePipeline(pipeline=gen)
+# Get Cohere LLM
+def get_llm():
+    return ChatCohere(
+        model="command-r",
+        cohere_api_key=cohere_api_key,
+        temperature=0.7,
+        max_tokens=512
+    )
 
 # Streamlit UI
-st.set_page_config(page_title="PDF QA Chat (No Upload)", layout="wide")
-st.title("📄 Chat with Pre-Loaded PDF (Backend Only)")
-
-model_type = st.radio("Select LLM backend:", ["Cohere (Cloud)", "Local LLM"], horizontal=True)
+st.set_page_config(page_title="PDF QA Chat", layout="wide")
+st.title("Networking Chatbot")
 
 # Embed if index is empty
 stats = index.describe_index_stats()
 if stats['total_vector_count'] == 0:
     with st.spinner("Embedding backend PDF into Pinecone..."):
         count = embed_pdf_to_pinecone()
-        st.success(f"✅ Embedded {count} chunks from the backend PDF!")
+        st.success(f"Embedded {count} chunks from the backend PDF!")
 
 # Prompt input
-query = st.text_input("💬 Enter your question:")
+query = st.text_input("Enter your question:")
 
 if query:
     try:
-        llm = get_llm(model_type)
+        llm = get_llm()
         retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
         qa_chain = RetrievalQA.from_chain_type(
             llm=llm,
@@ -137,13 +114,13 @@ if query:
         with st.spinner("Generating answer..."):
             result = qa_chain.invoke({"query": query})
 
-        st.subheader("🧠 Answer:")
+        st.subheader("Answer:")
         st.write(result["result"])
 
         if result.get("source_documents"):
-            st.subheader("📚 Source Excerpts:")
+            st.subheader("Source Excerpts:")
             for i, doc in enumerate(result["source_documents"], 1):
                 st.markdown(f"**Chunk {i}:** {doc.page_content[:300]}...")
 
     except Exception as e:
-        st.error(f"❌ Error: {e}")
+        st.error(f"Error: {e}")
